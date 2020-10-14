@@ -1,1 +1,1 @@
-from moov.plugin import MoovPlugin
+from .plugin import MoovPlugin
