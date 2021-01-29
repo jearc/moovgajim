@@ -1,20 +1,75 @@
 from threading import Thread
-from subprocess import Popen, PIPE
+import re
+from functools import reduce
+from pathlib import Path
+import time
 from gajim.common import app
 from gajim.common import ged
 from gajim.plugins import GajimPlugin
 from gajim.plugins.plugins_i18n import _
 from gajim.common.structs import OutgoingMessage
+from gajim.common import configpaths
 from gi.repository import GLib
+import moovgajim.moov as moov
+import moovgajim.moovdb as moovdb
+
+
+def parse_time(string):
+	ns = re.findall(r'-?\d+', string)
+	return reduce(lambda t, n: 60*t + int(n), ns[:3], 0)
+
+
+def parse_set(string):
+	parts = string.split()
+	return {
+		'playlist_position': int(parts[0]) - 1,
+		'paused':  parts[1] == 'paused',
+		'time':  parse_time(parts[2])
+	}
+
+
+def format_time(time):
+	s = int(round(time))
+	h, s = s // 3600, s % 3600
+	m, s = s // 60, s % 60
+	return (f'{h}:{m:02}' if h else f'{m}') + f':{s:02}'
+
+
+def format_status(status):
+	s = f'{status["playlist_position"]+1}/{status["playlist_count"]} '
+	s += 'paused' if status['paused'] else 'playing'
+	s += f' {format_time(status["time"])}'
+	return s
+
+
+class Conversation:
+
+	def __init__(self, account, contact, conn):
+		self._account = account
+		self._contact = contact
+		self._conn = conn
+
+	def send(self, text):
+		def f(text):
+			message = OutgoingMessage(self._account, self._contact, text, 'chat')
+			self._conn.send_message(message)
+		GLib.idle_add(f, text)
+
+	def send_html(self, body):
+		def f(body):
+			xhtml = f'<body>{body}</body>'
+			message = OutgoingMessage(self._account, self._contact, xhtml, 'chat', xhtml=xhtml)
+			self._conn.send_message(message)
+		GLib.idle_add(f, body)
 
 
 class MoovPlugin(GajimPlugin):
 
 	moov_thread = None
-	moov_proc = None
-	account = None
-	conn = None
-	contact = None
+	moov = None
+	conv = None
+	video_url = None
+	db = None
 
 	def init(self):
 		self.description = _('Adds Moov support to Gajim')
@@ -23,68 +78,200 @@ class MoovPlugin(GajimPlugin):
 			'decrypted-message-received': (ged.PREGUI, self._on_message_received),
 			'message-sent': (ged.PREGUI, self._on_message_sent),
 		}
+		db_path = Path(configpaths.get('PLUGINS_DATA')) / 'moov' / 'db.json'
+		self.db = moovdb.MoovDB(db_path)
 
 	def _on_message_received(self, event):
 		if not event.msgtxt:
 			return
-		
+
 		contact = app.contacts.get_contact(event.account, event.jid)
-		self.relay_message(contact.get_shown_name(), event.msgtxt)
-		self.handle_command(event.account, event.conn, contact, event.msgtxt)
-	
+		conv = Conversation(event.account, contact, event.conn)
+		self.relay_message(event.msgtxt, False)
+		self.handle_command(conv, event.msgtxt)
+
 	def _on_message_sent(self, event):
 		if not event.message:
-			return		
+			return
 		if not event.control:
 			return
-			
-		self.relay_message(event.control.get_our_nick(), event.message)
-		self.handle_command(event.control.account, event.control.connection,
-		    event.control.contact, event.message)
-	
+
+		conv = Conversation(
+			event.control.account,
+			event.control.contact,
+			event.control.connection
+		)
+
+		self.relay_message(event.message, True)
+		self.handle_command(conv, event.message)
+
 	def send_message(self, body):
-		message = OutgoingMessage(self.account, self.contact, body, 'chat')
-		self.conn.send_message(message)
-		self.relay_message(app.nicks[self.account], body)
-		self.handle_command(self.account, self.conn, self.contact, body)
-	
-	def handle_command(self, account, conn, contact, message):
+		def f(body):
+			self.conv.send(body)
+			self.relay_message(body, True)
+			self.handle_command(self.conv, body)
+		GLib.idle_add(f, body)
+
+	def handle_command(self, conv, message):
 		tokens = message.split()
-		if tokens[0] == 'YT':
-			args = [tokens[1]]
-			if len(tokens) > 2:
-				args += ['-s', ':'.join(tokens[2:])]
-			self.account = account
-			self.conn = conn
-			self.contact = contact
-			self.open_moov(args)
-	
-	def open_moov(self, args):
+
+		alive = self.moov is not None and self.moov.alive()
+
+		if tokens[0] == '.stutas':
+			if alive:
+				self.send_message(format_status(self.moov.get_status()))
+			else:
+				conv.send('nothing playing')
+		elif tokens[0] == '.pp':
+			if alive:
+				self.moov.toggle_paused()
+				self.send_message(format_status(self.moov.get_status()))
+				self.update_db()
+		elif message[0:6] == '.seek ':
+			if alive:
+				self.moov.seek(parse_time(message[6:]))
+				self.send_message(format_status(self.moov.get_status()))
+				self.update_db()
+		elif message[0:7] == '.seek+ ':
+			if alive:
+				self.moov.relative_seek(parse_time(message[7:]))
+				self.send_message(format_status(self.moov.get_status()))
+				self.update_db()
+		elif message[0:7] == '.seek- ':
+			if alive:
+				self.moov.relative_seek(-parse_time(message[7:]))
+				self.send_message(format_status(self.moov.get_status()))
+				self.update_db()
+		elif message[0:5] == '.set ':
+			if alive:
+				try:
+					args = parse_set(message[5:])
+					self.moov.set_canonical(args['playlist_position'], args['paused'], args['time'])
+					self.send_message(format_status(self.moov.get_status()))
+					self.update_db()
+				except:
+					conv.send('error: invalid args')
+		elif tokens[0] == '.klose':
+			if alive:
+				self.update_db()
+				self.kill_moov()
+		elif tokens[0] == '.adda':
+			if self.db is not None:
+				try:
+					url = tokens[1]
+					time = 0 if len(tokens) < 3 else parse_time(tokens[2])
+				except:
+					conv.send('error: invalid args')
+
+				def cb(info):
+					(index, session, dupe) = self.db.add(info, time)
+					xhtml = 'already have ' if dupe else 'added '
+					xhtml += moovdb.format_session(index, session)
+					conv.send_html(xhtml)
+
+				download_thread = Thread(target=self.download_info, args=[url, cb, conv])
+				download_thread.start()
+		elif tokens[0] == '.lst':
+			if self.db is not None:
+				session_list = self.db.list()
+				if len(session_list) != 0:
+					xhtml = moovdb.format_sessions(self.db.list())
+					conv.send_html(xhtml)
+				else:
+					conv.send('no sessions')
+		elif tokens[0] == '.popp':
+			if self.db is not None:
+				indices = tokens[1:]
+				for i in range(len(indices)):
+					indices[i] = int(indices[i])
+				self.db.pop(indices)
+				xhtml = moovdb.format_sessions(self.db.list())
+				conv.send_html(xhtml)
+		elif tokens[0] == '.rsm':
+			if self.db is not None:
+				if len(tokens) >= 2:
+					try:
+						self.db.set_top(int(tokens[1]))
+					except:
+						return
+				session = self.db.top()
+				self.conv = conv
+				self.open_moov()
+				self.video_url = session['video_info']['url']
+				self.moov.append(self.video_url)
+				self.moov.seek(session['time'])
+				self.conv.send(f'.{self.video_url} {format_time(session["time"])}')
+				self.send_message(format_status(self.moov.get_status()))
+		elif tokens[0] == '.re':
+			if self.db is not None and alive:
+				time_str = format_time(self.moov.get_status()['time'])
+				self.conv.send(f'.{self.video_url} {time_str}')
+		elif message[0:6] == '.http' or message[0:6] == '.rtmp':
+			url = tokens[0][1:]
+			time = 0 if len(tokens) < 3 else parse_time(tokens[1])
+
+			def cb(info):
+				if self.db is not None:
+					(index, session, dupe) = self.db.add(info, time)
+					self.db.set_top(index)
+				self.video_url = info['url']
+				self.conv = conv
+				self.open_moov()
+				self.moov.append(url)
+				self.moov.seek(time)
+				self.send_message(format_status(self.moov.get_status()))
+
+			download_thread = Thread(target=self.download_info, args=[url, cb, conv])
+			download_thread.start()
+
+	def download_info(self, url, callback, conv):
+		try:
+			info = moovdb.download_info(url)
+			GLib.idle_add(callback, info)
+		except:
+			GLib.idle_add(conv.send, 'error: could not get video information')
+
+	def handle_control(self, control_command):
+		p = control_command['playlist_position'] + 1
+		t = format_time(control_command['time'])
+		pp = 'paused' if control_command['paused'] else 'playing'
+		message = f'.set {p} {pp} {t}'
+		self.send_message(message)
+
+	def open_moov(self):
 		self.kill_moov()
-		self.moov_proc = Popen(['moov'] + args,
-		    stdin=PIPE, stdout=PIPE, bufsize=1, universal_newlines=True)
+		self.moov = moov.Moov()
 		self.moov_thread = Thread(target=self.moov_thread_f)
 		self.moov_thread.start()
-		
-	def moov_thread_f(self):
-		partial = ''
-		while self.moov_proc and self.moov_proc.poll() is None:
-			char = self.moov_proc.stdout.read(1)
-			if char == '\0':
-				GLib.idle_add(self.send_message, partial)
-				partial = ''
-			else:
-				partial = partial + char
-		
-	def relay_message(self, nick, message):
-		if self.moov_proc and self.moov_proc.poll() is None:
-			self.moov_proc.stdin.write(nick + ':' + message + '\0')
-			self.moov_proc.stdin.flush()
-	
-	def kill_moov(self):
-		if not self.moov_proc:
-			return
-		self.moov_proc.terminate()
-		self.moov_proc = None
-		self.moov_thread = None
 
+	def update_db(self):
+		if self.db is not None:
+			time = self.moov.get_status()['time']
+			self.db.update_time(self.video_url, time)
+
+	def moov_thread_f(self):
+		last_update = time.time()
+		while self.moov is not None and self.moov.alive():
+			now = time.time()
+			if now - last_update > 5:
+				GLib.idle_add(self.update_db)
+				last_update = now
+			for user_input in self.moov.get_user_inputs():
+				GLib.idle_add(self.send_message, user_input)
+			for control_command in self.moov.get_user_control_commands():
+				GLib.idle_add(self.handle_control, control_command)
+			time.sleep(0.01)
+		if self.moov is not None:
+			self.kill_moov()
+
+	def relay_message(self, message, own):
+		if self.moov and self.moov.alive():
+			fg = '#ffffbf' if own else '#afeeee'
+			self.moov.put_message(message, fg, "#00000088")
+
+	def kill_moov(self):
+		if not self.moov:
+			return
+		self.moov.close()
+		self.moov = None
+		self.moov_thread = None
