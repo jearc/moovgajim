@@ -94,8 +94,9 @@ class MoovDB:
 
     def update_time(self, url, time):
         index = self.index_of_url(url)
-        self._db[index]['time'] = time
-        self._save()
+        if index is not None:
+            self._db[index]['time'] = time
+            self._save()
 
     def top(self):
         return self._db[-1]
