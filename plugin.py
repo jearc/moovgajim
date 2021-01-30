@@ -168,6 +168,26 @@ class MoovPlugin(GajimPlugin):
 
 				download_thread = Thread(target=self.download_info, args=[url, cb, conv])
 				download_thread.start()
+		elif tokens[0] == '.o':
+			try:
+				url = tokens[1]
+				time = 0 if len(tokens) < 3 else parse_time(tokens[2])
+			except:
+				conv.send('error: invalid args')
+
+			def cb(info):
+				if self.db is not None:
+					(index, session, dupe) = self.db.add(info, time)
+					self.db.set_top(index)
+				self.video_url = info['url']
+				self.conv = conv
+				self.open_moov()
+				self.moov.append(self.video_url)
+				self.moov.seek(time)
+				self.send_message(format_status(self.moov.get_status()))
+
+			download_thread = Thread(target=self.download_info, args=[url, cb, conv])
+			download_thread.start()
 		elif tokens[0] == '.lst':
 			if self.db is not None:
 				session_list = self.db.list()
@@ -205,23 +225,7 @@ class MoovPlugin(GajimPlugin):
 			if self.db is not None and alive:
 				time_str = format_time(self.moov.get_status()['time'])
 				self.conv.send(f'.{self.video_url} {time_str}')
-		elif message[0:6] == '.http' or message[0:6] == '.rtmp':
-			url = tokens[0][1:]
-			time = 0 if len(tokens) < 3 else parse_time(tokens[1])
 
-			def cb(info):
-				if self.db is not None:
-					(index, session, dupe) = self.db.add(info, time)
-					self.db.set_top(index)
-				self.video_url = info['url']
-				self.conv = conv
-				self.open_moov()
-				self.moov.append(url)
-				self.moov.seek(time)
-				self.send_message(format_status(self.moov.get_status()))
-
-			download_thread = Thread(target=self.download_info, args=[url, cb, conv])
-			download_thread.start()
 
 	def download_info(self, url, callback, conv):
 		try:
