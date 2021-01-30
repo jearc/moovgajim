@@ -10,6 +10,7 @@ from gajim.plugins.plugins_i18n import _
 from gajim.common.structs import OutgoingMessage
 from gajim.common import configpaths
 from gi.repository import GLib
+from nbxmpp.modules.misc import build_xhtml_body
 import moovgajim.moov as moov
 import moovgajim.moovdb as moovdb
 
@@ -49,18 +50,13 @@ class Conversation:
 		self._contact = contact
 		self._conn = conn
 
-	def send(self, text):
+	def send(self, text, xhtml=None):
+		if xhtml is not None:
+			xhtml = build_xhtml_body(xhtml)
 		def f(text):
-			message = OutgoingMessage(self._account, self._contact, text, 'chat')
+			message = OutgoingMessage(self._account, self._contact, text, 'chat', xhtml=xhtml)
 			self._conn.send_message(message)
 		GLib.idle_add(f, text)
-
-	def send_html(self, body):
-		def f(body):
-			xhtml = f'<body>{body}</body>'
-			message = OutgoingMessage(self._account, self._contact, xhtml, 'chat', xhtml=xhtml)
-			self._conn.send_message(message)
-		GLib.idle_add(f, body)
 
 
 class MoovPlugin(GajimPlugin):
@@ -165,9 +161,10 @@ class MoovPlugin(GajimPlugin):
 
 				def cb(info):
 					(index, session, dupe) = self.db.add(info, time)
-					xhtml = 'already have ' if dupe else 'added '
-					xhtml += moovdb.format_session(index, session)
-					conv.send_html(xhtml)
+					prefix = 'already have ' if dupe else 'added '
+					text = prefix + moovdb.format_session_text(index, session)
+					xhtml = prefix + moovdb.format_session_html(index, session)
+					conv.send(text, xhtml=xhtml)
 
 				download_thread = Thread(target=self.download_info, args=[url, cb, conv])
 				download_thread.start()
@@ -175,8 +172,9 @@ class MoovPlugin(GajimPlugin):
 			if self.db is not None:
 				session_list = self.db.list()
 				if len(session_list) != 0:
-					xhtml = moovdb.format_sessions(self.db.list())
-					conv.send_html(xhtml)
+					text = moovdb.format_sessions_text(self.db.list())
+					xhtml = moovdb.format_sessions_html(self.db.list())
+					conv.send(text, xhtml=xhtml)
 				else:
 					conv.send('no sessions')
 		elif tokens[0] == '.popp':
@@ -185,8 +183,9 @@ class MoovPlugin(GajimPlugin):
 				for i in range(len(indices)):
 					indices[i] = int(indices[i])
 				self.db.pop(indices)
-				xhtml = moovdb.format_sessions(self.db.list())
-				conv.send_html(xhtml)
+				text = moovdb.format_sessions_text(self.db_list())
+				xhtml = moovdb.format_sessions_html(self.db.list())
+				conv.send(text, xhtml=xhtml)
 		elif tokens[0] == '.rsm':
 			if self.db is not None:
 				if len(tokens) >= 2:

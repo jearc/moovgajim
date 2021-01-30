@@ -24,18 +24,32 @@ def format_time(time):
 def format_link(url, text):
     return f'<a href="{url}">{html.escape(text)}</a>'
 
-def format_session(index, session):
+def format_session_html(index, session):
     info = session['video_info']
     index = html.escape(f'[{index}]')
     uploader = format_link(info['uploader_url'], info['uploader'])
-    url = format_link(info['url'], info['title'])
+    link = format_link(info['url'], info['title'])
     time = html.escape(format_time(session["time"]))
-    return f'{index} {uploader}: {url} {time}'
+    return f'{index} {uploader}: {link} {time}'
 
-def format_sessions(sessions):
+def format_session_text(index, session):
+    info = session['video_info']
+    index = f'[{index}]'
+    uploader = info['uploader']
+    title = info['title']
+    time = format_time(session['time'])
+    return f'{index} {uploader}: {title} {time}'
+
+def format_sessions_html(sessions):
     res = ''
     for i, s in enumerate(sessions):
-        res += f'{format_session(i, s)} '
+        res += f'{format_session_html(i, s)} '
+    return res
+
+def format_sessions_text(sessions):
+    res = ''
+    for i, s in enumerate(sessions):
+        res += f'{format_session_text(i, s)} '
     return res
 
 class MoovDB:
