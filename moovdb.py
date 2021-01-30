@@ -10,9 +10,9 @@ def download_info(url):
     return {
         'url': url,
         'title': j['title'],
-        'uploader': j['uploader'],
-        'uploader_url': j['uploader_url'],
-        'duration': j['duration']
+        'uploader': j['uploader'] if 'uploader' in j else 'Unknown',
+        'uploader_url': j['uploader_url'] if 'uploader_url' in j else None,
+        'duration': j['duration'] if 'duration' in j else None
     }
 
 def format_time(time):
@@ -27,7 +27,9 @@ def format_link(url, text):
 def format_session_html(index, session):
     info = session['video_info']
     index = html.escape(f'[{index}]')
-    uploader = format_link(info['uploader_url'], info['uploader'])
+    uploader = html.escape(info['uploader'])
+    if info['uploader_url'] is not None:
+        uploader = format_link(info['uploader_url'], info['uploader'])
     link = format_link(info['url'], info['title'])
     time = html.escape(format_time(session["time"]))
     return f'{index} {uploader}: {link} {time}'
