@@ -113,12 +113,12 @@ class MoovPlugin(GajimPlugin):
 
 		alive = self.moov is not None and self.moov.alive()
 
-		if tokens[0] == '.stutas':
+		if tokens[0] == '.status':
 			if alive:
 				self.send_message(format_status(self.moov.get_status()))
 			else:
 				conv.send('nothing playing')
-		elif tokens[0] == '.pp':
+		elif tokens[0] == 'pp':
 			if alive:
 				self.moov.toggle_paused()
 				self.send_message(format_status(self.moov.get_status()))
@@ -147,11 +147,11 @@ class MoovPlugin(GajimPlugin):
 					self.update_db()
 				except:
 					conv.send('error: invalid args')
-		elif tokens[0] == '.klose':
+		elif tokens[0] == '.close':
 			if alive:
 				self.update_db()
 				self.kill_moov()
-		elif tokens[0] == '.adda':
+		elif tokens[0] == '.add':
 			if self.db is not None:
 				try:
 					url = tokens[1]
@@ -188,7 +188,7 @@ class MoovPlugin(GajimPlugin):
 
 			download_thread = Thread(target=self.download_info, args=[url, cb, conv])
 			download_thread.start()
-		elif tokens[0] == '.lst':
+		elif tokens[0] == '.list':
 			if self.db is not None:
 				session_list = self.db.list()
 				if len(session_list) != 0:
@@ -197,7 +197,7 @@ class MoovPlugin(GajimPlugin):
 					conv.send(text, xhtml=xhtml)
 				else:
 					conv.send('no sessions')
-		elif tokens[0] == '.popp':
+		elif tokens[0] == '.pop':
 			if self.db is not None:
 				indices = tokens[1:]
 				for i in range(len(indices)):
@@ -206,7 +206,7 @@ class MoovPlugin(GajimPlugin):
 				text = moovdb.format_sessions_text(self.db_list())
 				xhtml = moovdb.format_sessions_html(self.db.list())
 				conv.send(text, xhtml=xhtml)
-		elif tokens[0] == '.rsm':
+		elif tokens[0] == '.resume':
 			if self.db is not None:
 				if len(tokens) >= 2:
 					try:
