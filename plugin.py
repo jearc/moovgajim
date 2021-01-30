@@ -239,7 +239,7 @@ class MoovPlugin(GajimPlugin):
 		t = format_time(control_command['time'])
 		pp = 'paused' if control_command['paused'] else 'playing'
 		message = f'.set {p} {pp} {t}'
-		self.send_message(message)
+		self.conv.send(message)
 
 	def open_moov(self):
 		self.kill_moov()
